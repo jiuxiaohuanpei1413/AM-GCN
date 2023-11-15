@@ -98,7 +98,7 @@ class DynamicGraphConvolution(nn.Module):
 
         self.activate = nn.LeakyReLU(0.2)
         self.gc1 = GraphConvolution(in_channel, 1024)
-        self.gc2 = GraphConvolution(1024, 2048)
+        self.gc2 = GraphConvolution(1024, num_nodes)
 
         self.long_adj = nn.Sequential(
             nn.Conv1d(num_nodes, num_nodes, 1, bias=False),
@@ -114,11 +114,17 @@ class DynamicGraphConvolution(nn.Module):
         self.fc_eq4_w = nn.Linear(in_features, in_features)
         self.fc_eq4_u = nn.Linear(in_features, in_features)
 
+        self.pooling = nn.AdaptiveAvgPool2d((1024, 29))
+
     def gen_adj_new(self, A):
         D = torch.pow(A.sum(1).float(), -0.5)
         D = torch.diag(D)
         adj = torch.matmul(D, torch.matmul(A, D))
         return adj
+
+    def forward_ave_pool(self, x):
+        x = self.pooling(x)
+        return x
 
     def forward_construct_static_adj(self, inp):
         inp1 = inp.unsqueeze(2)
@@ -139,8 +145,13 @@ class DynamicGraphConvolution(nn.Module):
         x = self.gc2(x, static_adj)
 
         x = torch.matmul(feature, x)
-        x = self.con(x.transpose(1, 2))
-        x = x.transpose(1, 2)
+
+        # x = torch.matmul(feature, x)
+        # x = self.con(x.transpose(1, 2))
+        # x = x.transpose(1, 2)
+
+        # x = torch.matmul(feature, x)
+        # x = self.forward_ave_pool(x)
 
         # x_ = x.transpose(0, 1)
         # x = torch.matmul(feature, x)
@@ -187,11 +198,11 @@ class DynamicGraphConvolution(nn.Module):
         return long_graph_feature2
 
     def forward(self, x, inp):
-        """ D-GCN module
+        """ SD-GCN module
 
         Shape:
-        - Input: (B, C_in, N) # C_in: 1024, N: num_classes
-        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
+        - Input: (B, D, C) # D: 1024, C: num_classes
+        - Output: (B, D, C) # D: 1024, C: num_classes
         """
         out_static, static_adj, A1 = self.forward_static_gcn(x, inp)
         x = x + out_static  # residual
@@ -237,8 +248,7 @@ class AM_GCN(nn.Module):
                              bias=False)  # Use nn.Conv2d instead of nn.Linear
         self.fc2 = nn.Conv2d(model.fc.in_features // 16, model.fc.in_features, kernel_size=1, bias=False)
 
-        self.pooling = nn.MaxPool2d(14, 14)
-        self.fc3 = nn.Conv1d(196, num_classes, 1)
+        self.pooling = nn.AdaptiveAvgPool2d((1024, 29))
 
     def forward_feature(self, x):
         x = self.features(x)
@@ -248,23 +258,20 @@ class AM_GCN(nn.Module):
         """ Get another confident scores {s_m}.
 
         Shape:
-        - Input: (B, C_in, H, W) # C_in: 2048
-        - Output: (B, C_out) # C_out: num_classes
+        - Input: (B, D_in, H, W) # D_in: 2048
+        - Output: (B, C) # C: num_classes
         """
         x = self.fc(x)
-
         x = x.view(x.size(0), x.size(1), -1)
-
         x = x.topk(1, dim=-1)[0].mean(dim=-1)
-        # print(x.size())
         return x
 
     def forward_sam(self, x):
         """ SAM module
 
         Shape:
-        - Input: (B, C_in, H, W) # C_in: 2048
-        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
+        - Input: (B, D_in, H, W) # D_in: 2048
+        - Output: (B, D_out, C) # D_out: 1024, C: num_classes
         """
         mask = self.fc(x)
         mask = mask.view(mask.size(0), mask.size(1), -1)
@@ -273,33 +280,20 @@ class AM_GCN(nn.Module):
 
         x = self.conv_transform(x)
         x = x.view(x.size(0), x.size(1), -1)
-        test = x.transpose(1, 2)
-        test = self.fc3(test)
-        test = test.transpose(1, 2)
-        # print(test.size())
         x = torch.matmul(x, mask)
 
         return x
 
-    def test(self, x):
-        x = self.conv_transform(x)
-        x = x.view(x.size(0), x.size(1), -1)
-        test = x.transpose(1, 2)
-        test = self.fc3(test)
-        test = test.transpose(1, 2)
-        out = test.contiguous()
-        return out
-
-    def forward_max_pool(self, x):
+    def forward_ave_pool(self, x):
         x = self.pooling(x)
         return x
 
     def forward_SENet(self, x):
-        """ SAM module
+        """ SENet module
 
         Shape:
-        - Input: (B, C_in, H, W) # C_in: 2048
-        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
+        - Input: (B, D_in, H, W) # D_in: 2048
+        - Output: (B, D_out, H, W) # D_out: 1024
         """
         # Squeeze
         mask = F.avg_pool2d(x, x.size(2))
@@ -320,16 +314,16 @@ class AM_GCN(nn.Module):
         out1 = self.forward_classification_sm(x)
 
         v0 = self.forward_SENet(x)
-        # v = self.forward_sam(v0)  # B*1024*num_classes
-        v = self.test(v0)
-        print(v.size())
-
+        v = self.forward_sam(v0)  # B*1024*num_classes
+        # v = self.forward_ave_pool(v)
         z, A, adj = self.forward_gcn(v, inp)
+
         z = v + z
         out2 = self.last_linear(z)  # B*1*num_classes
 
         mask_mat = self.mask_mat.detach()
         out2 = (out2 * mask_mat).sum(-1)
+
         out = (out1 + out2) / 2
 
         return out, adj, A

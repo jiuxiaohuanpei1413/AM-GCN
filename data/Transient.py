@@ -46,7 +46,7 @@ class Transient(Dataset):
         item = self.img_list[index]
         filename = item['file_name']
         labels = sorted(item['labels'])
-        img = Image.open(os.path.join(self.root, '{}2014'.format(self.phase), filename)).convert('RGB')
+        img = Image.open(os.path.join(self.root, '{}'.format(self.phase), filename)).convert('RGB')
         if self.transform is not None:
             img = self.transform(img)
         # target = np.zeros(self.num_classes, np.float32) - 1

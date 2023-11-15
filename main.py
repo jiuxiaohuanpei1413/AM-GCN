@@ -28,13 +28,15 @@ parser.add_argument('--max_clip_grad_norm', default=10.0, type=float, metavar='M
 parser.add_argument('--seed', default=1, type=int, help='seed for initializing training. ')
 
 ''' Train setting '''
-parser.add_argument('--data', metavar='NAME', default='Transient', help='dataset name (e.g. COCO2014')
+# parser.add_argument('--data', metavar='NAME', default='Transient', help='dataset name (e.g. COCO2014')
+parser.add_argument('--data', metavar='NAME', default='weather', help='dataset name (e.g. COCO2014')
 # parser.add_argument('--data', metavar='NAME', default='COCO2014', help='dataset name (e.g. COCO2014')
 # parser.add_argument('--data', metavar='NAME', default='VOC2007', help='dataset name (e.g. COCO2014')
 
 parser.add_argument('--model_name', type=str, default='AM_GCN')
 
-parser.add_argument('--save_dir', default='./checkpoint/Transient/', type=str, help='save path')
+# parser.add_argument('--save_dir', default='./checkpoint/Transient/', type=str, help='save path')
+parser.add_argument('--save_dir', default='./checkpoint/weather/', type=str, help='save path')
 # parser.add_argument('--save_dir', default='./checkpoint/COCO2014/', type=str, help='save path')
 # parser.add_argument('--save_dir', default='./checkpoint/VOC2007/', type=str, help='save path')
 

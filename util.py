@@ -194,7 +194,8 @@ class AveragePrecisionMeter(object):
 def gen_A(num_classes):
     import pickle
 
-    adj_file = './data/adj/Transient_Attributes_adj_29.pkl'
+    # adj_file = './data/adj/Transient_Attributes_adj_29.pkl'
+    adj_file = './data/adj/weather_adj_5.pkl'
     # adj_file = './data/adj/coco_adj.pkl'
     # adj_file = './data/adj/voc_adj.pkl'
 
