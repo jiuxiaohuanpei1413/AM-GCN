@@ -9,7 +9,6 @@ import torchvision.transforms as transforms
 from .coco import COCO2014
 from .voc import VOC2007, VOC2012
 from .Transient import Transient
-from .weather import weather
 
 data_dict = {'COCO2014': COCO2014,
             'VOC2007': VOC2007,
@@ -126,8 +125,6 @@ def make_data_loader(args, is_train=True):
         val_dataset = COCO2014(root_dir, phase='val', transform=transform)
     elif args.data == 'Transient':
         val_dataset = Transient(root_dir, phase='val', transform=transform)
-    elif args.data == 'weather':
-        val_dataset = weather(root_dir, phase='val', transform=transform)
     elif args.data in ('VOC2007', 'VOC2012'):
         val_dataset = data_dict[args.data](root_dir, phase='test', transform=transform)
     else:
@@ -147,8 +144,6 @@ def make_data_loader(args, is_train=True):
         train_dataset = COCO2014(root_dir, phase='train', transform=transform)
     elif args.data == 'Transient':
         train_dataset = Transient(root_dir, phase='train', transform=transform)
-    elif args.data == 'weather':
-        train_dataset = weather(root_dir, phase='train', transform=transform)
     elif args.data in ('VOC2007', 'VOC2012'):
         train_dataset = data_dict[args.data](root_dir, phase='trainval', transform=transform)
     else:
