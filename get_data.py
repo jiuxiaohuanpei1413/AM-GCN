@@ -1,21 +1,31 @@
-import os
+# @inproceedings{ML_GCN_CVPR_2019,
+# author = {Zhao-Min, Chen and Xiu-Shen, Wei and Peng, Wang and Yanwen, Guo},
+# title = {{Multi-Label Image Recognition with Graph Convolutional Networks}},
+# booktitle = {The IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},
+# year = {2019}
+# }
+# This code references the ML_GCN
+import torch.utils.data as data
 import json
+import os
 import subprocess
 from PIL import Image
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 import pickle
+from util import *
 
 urls = {'train_img':'http://images.cocodataset.org/zips/train2014.zip',
         'val_img' : 'http://images.cocodataset.org/zips/val2014.zip',
         'annotations':'http://images.cocodataset.org/annotations/annotations_trainval2014.zip'}
 
 def download_coco2014(root, phase):
-    work_dir = os.getcwd()
-    tmpdir = os.path.join(root, 'tmp/')
     if not os.path.exists(root):
         os.makedirs(root)
+    tmpdir = os.path.join(root, 'tmp/')
+    data = os.path.join(root, 'data/')
+    if not os.path.exists(data):
+        os.makedirs(data)
     if not os.path.exists(tmpdir):
         os.makedirs(tmpdir)
     if phase == 'train':
@@ -29,10 +39,10 @@ def download_coco2014(root, phase):
         subprocess.call('wget ' + urls[phase + '_img'], shell=True)
         os.chdir(root)
     # extract file
-    img_data = os.path.join(root, filename.split('.')[0])
+    img_data = os.path.join(data, filename.split('.')[0])
     if not os.path.exists(img_data):
-        print('[dataset] Extracting tar file {file} to {path}'.format(file=cached_file, path=root))
-        command = 'unzip {} -d {}'.format(cached_file,root)
+        print('[dataset] Extracting tar file {file} to {path}'.format(file=cached_file, path=data))
+        command = 'unzip {} -d {}'.format(cached_file,data)
         os.system(command)
     print('[dataset] Done!')
 
@@ -41,18 +51,16 @@ def download_coco2014(root, phase):
     if not os.path.exists(cached_file):
         print('Downloading: "{}" to {}\n'.format(urls['annotations'], cached_file))
         os.chdir(tmpdir)
-        # subprocess.Popen('wget ' + urls['annotations'], shell=True)
-        subprocess.call('wget ' + urls['annotations'], shell=True)
+        subprocess.Popen('wget ' + urls['annotations'], shell=True)
         os.chdir(root)
-    annotations_data = os.path.join(root, 'annotations')
+    annotations_data = os.path.join(data, 'annotations')
     if not os.path.exists(annotations_data):
-        print('[dataset] Extracting tar file {file} to {path}'.format(file=cached_file, path=root))
-        command = 'unzip {} -d {}'.format(cached_file, root)
+        print('[dataset] Extracting tar file {file} to {path}'.format(file=cached_file, path=data))
+        command = 'unzip {} -d {}'.format(cached_file, data)
         os.system(command)
     print('[annotation] Done!')
-
-    annotations_data = os.path.join(root, 'annotations')
-    anno = os.path.join(root, '{}_anno.json'.format(phase))
+    annotations_data = os.path.join(data, 'annotations')
+    anno = os.path.join(data, '{}_anno.json'.format(phase))
     img_id = {}
     annotations_id = {}
     if not os.path.exists(anno):
@@ -79,8 +87,8 @@ def download_coco2014(root, phase):
         for k, v in img_id.items():
             anno_list.append(v)
         json.dump(anno_list, open(anno, 'w'))
-        if not os.path.exists(os.path.join(root, 'category.json')):
-            json.dump(cat2idx, open(os.path.join(root, 'category.json'), 'w'))
+        if not os.path.exists(os.path.join(data, 'category.json')):
+            json.dump(cat2idx, open(os.path.join(data, 'category.json'), 'w'))
         del img_id
         del anno_list
         del images
@@ -89,7 +97,6 @@ def download_coco2014(root, phase):
         del category
         del category_id
     print('[json] Done!')
-    os.chdir(work_dir)
 
 def categoty_to_idx(category):
     cat2idx = {}
@@ -98,47 +105,45 @@ def categoty_to_idx(category):
     return cat2idx
 
 
-class COCO2014(Dataset):
-    def __init__(self, root, transform=None, phase='train'):
-        self.root = os.path.abspath(root)
+class get_datas(data.Dataset):
+    def __init__(self, root, transform=None, phase='train', inp_name=None):
+        self.root = root
         self.phase = phase
         self.img_list = []
         self.transform = transform
-        # download_coco2014(self.root, phase)
+        # download_coco2014(root, phase)
         self.get_anno()
         self.num_classes = len(self.cat2idx)
-        self.inp_name = './word2vec/coco_glove_word2vec.pkl'
-        # self.inp_name = './word2vec/coco_glove_word2vec_4.pkl'
 
-        if self.inp_name is not None:
-            with open(self.inp_name, 'rb') as f:
+        if inp_name is not None:
+            with open(inp_name, 'rb') as f:
                 self.inp = pickle.load(f)
         else:
-            self.inp = np.identity(80)
+            self.inp = np.identity(29)
+        self.inp_name = inp_name
 
-        print('[dataset] COCO2014 classification phase={} number of classes={}  number of images={}'.format(phase, self.num_classes, len(self.img_list)))
-        # print(self.inp)
-
-    def get_anno(self):
-        list_path = os.path.join(self.root, '{}_anno.json'.format(self.phase))
+    def get_anno(self): #Transient COCO2014 VOC2007
+        list_path = os.path.join(self.root, 'Transient', '{}_anno.json'.format(self.phase))
         self.img_list = json.load(open(list_path, 'r'))
-        self.cat2idx = json.load(open(os.path.join(self.root, 'category.json'), 'r'))
+        self.cat2idx = json.load(open(os.path.join(self.root, 'Transient', 'category.json'), 'r'))
+
 
     def __len__(self):
         return len(self.img_list)
 
     def __getitem__(self, index):
         item = self.img_list[index]
+        return self.get(item)
+
+    def get(self, item):
         filename = item['file_name']
         labels = sorted(item['labels'])
-        img = Image.open(os.path.join(self.root, '{}2014'.format(self.phase), filename)).convert('RGB')
+        img = Image.open(os.path.join(self.root, 'Transient', '{}2014'.format(self.phase), filename)).convert('RGB')
         if self.transform is not None:
             img = self.transform(img)
-        # target = np.zeros(self.num_classes, np.float32) - 1
-        target = torch.zeros(self.num_classes,  dtype=torch.float32) - 1
+        target = np.zeros(self.num_classes, np.float32) - 1
         target[labels] = 1
+
         inp = torch.Tensor(np.array(self.inp))
-        data = {'image':img, 'name': filename, 'target': target, 'inp': inp}
-        return data
-        # return image, target
-        # return (img, filename), target
+
+        return (img, filename, inp), target

@@ -1,12 +1,10 @@
-import math
+import torchvision.models as models
+from torch.nn import Parameter
 from util import *
 import torch
 import torch.nn as nn
-from torch.nn import Parameter
-import torchvision.models as models
 import torch.nn.functional as F
 
-import pickle
 
 
 class NONLocalBlock1D(nn.Module):
@@ -33,12 +31,12 @@ class NONLocalBlock1D(nn.Module):
         theta_x = theta_x.squeeze(2)
         phi_x = self.phi(x).view(batch_size, self.inter_channels, -1)
         phi_x = phi_x.squeeze(2).transpose(0,1)
-
         f = torch.matmul(theta_x, phi_x)
         N = f.size(-1)
         f_div_C = f / N
 
         return f_div_C
+
 
 class GraphConvolution(nn.Module):
     """
@@ -70,10 +68,57 @@ class GraphConvolution(nn.Module):
         else:
             return output
 
-    def __repr__(self):
-        return self.__class__.__name__ + ' (' \
-               + str(self.in_features) + ' -> ' \
-               + str(self.out_features) + ')'
+class GCNResnet(nn.Module):
+    def __init__(self, model, num_classes, in_channel=300):
+        super(GCNResnet, self).__init__()
+        self.features = nn.Sequential(
+            model.conv1,
+            model.bn1,
+            model.relu,
+            model.maxpool,
+            model.layer1,
+            model.layer2,
+            model.layer3,
+            model.layer4,
+        )
+        self.num_classes = num_classes
+        self.pooling = nn.MaxPool2d(14, 14)
+
+        self.non_local_C1 = NONLocalBlock1D(in_channel)
+        self.gc1 = GraphConvolution(in_channel, 1024)
+        self.gc2 = GraphConvolution(1024, 2048)
+        self.activate = nn.LeakyReLU(0.2)
+        # image normalization
+        self.image_normalization_mean = [0.485, 0.456, 0.406]
+        self.image_normalization_std = [0.229, 0.224, 0.225]
+
+    def forward(self, feature, inp):
+        feature = self.features(feature)
+        feature = self.pooling(feature)
+        feature = feature.view(feature.size(0), -1)
+        inp = inp[0]
+        inp1 = inp.unsqueeze(2)
+        adj = self.non_local_C1(inp1)
+        A1 = torch.eye(80, 80).float().cuda()
+        A1 = torch.autograd.Variable(A1)
+        adj= adj+ A1
+        adj = gen_adj_new(adj)
+        x = self.gc1(inp, adj)
+        x = self.activate(x)
+        x = self.gc2(x, adj)
+        x = x.transpose(0, 1)
+        x = torch.matmul(feature, x)
+        A = A1.unsqueeze(0)
+        adj = adj.unsqueeze(0)
+        return x, adj, A
+
+    def get_config_optim(self, lr, lrp):
+        small_lr_layers = list(map(id, self.features.parameters()))
+        large_lr_layers = filter(lambda p: id(p) not in small_lr_layers, self.parameters())
+        return [
+            {'params': self.features.parameters(), 'lr': lr * lrp},
+            {'params': large_lr_layers, 'lr': lr},
+        ]
 
 
 class DynamicGraphConvolution(nn.Module):
@@ -98,7 +143,7 @@ class DynamicGraphConvolution(nn.Module):
 
         self.activate = nn.LeakyReLU(0.2)
         self.gc1 = GraphConvolution(in_channel, 1024)
-        self.gc2 = GraphConvolution(1024, num_nodes)
+        self.gc2 = GraphConvolution(1024, 2048)
 
         self.long_adj = nn.Sequential(
             nn.Conv1d(num_nodes, num_nodes, 1, bias=False),
@@ -114,26 +159,14 @@ class DynamicGraphConvolution(nn.Module):
         self.fc_eq4_w = nn.Linear(in_features, in_features)
         self.fc_eq4_u = nn.Linear(in_features, in_features)
 
-        self.pooling = nn.AdaptiveAvgPool2d((1024, 29))
-
-    def gen_adj_new(self, A):
-        D = torch.pow(A.sum(1).float(), -0.5)
-        D = torch.diag(D)
-        adj = torch.matmul(D, torch.matmul(A, D))
-        return adj
-
-    def forward_ave_pool(self, x):
-        x = self.pooling(x)
-        return x
-
     def forward_construct_static_adj(self, inp):
+        inp = inp[0]
         inp1 = inp.unsqueeze(2)
-        inp1 = inp1.cuda()
         adj = self.non_local_C1(inp1)
         A1 = torch.eye(self.num_nodes, self.num_nodes).float().cuda()
         A1 = torch.autograd.Variable(A1)
         adj = adj + A1
-        static_adj = self.gen_adj_new(adj)
+        static_adj = gen_adj_new(adj)
         return static_adj, A1
 
     def forward_static_gcn(self, feature, inp):
@@ -145,18 +178,13 @@ class DynamicGraphConvolution(nn.Module):
         x = self.gc2(x, static_adj)
 
         x = torch.matmul(feature, x)
-
-        # x = torch.matmul(feature, x)
-        # x = self.con(x.transpose(1, 2))
-        # x = x.transpose(1, 2)
-
-        # x = torch.matmul(feature, x)
-        # x = self.forward_ave_pool(x)
+        x = self.con(x.transpose(1, 2))
+        x = x.transpose(1, 2)
 
         # x_ = x.transpose(0, 1)
         # x = torch.matmul(feature, x)
         # x = torch.matmul(x, x_)
-        return x, static_adj_1, A1
+        return x, static_adj, A1
 
     def forward_construct_short(self, x):
         ### Model global representations ###
@@ -198,11 +226,11 @@ class DynamicGraphConvolution(nn.Module):
         return long_graph_feature2
 
     def forward(self, x, inp):
-        """ SD-GCN module
+        """ D-GCN module
 
         Shape:
-        - Input: (B, D, C) # D: 1024, C: num_classes
-        - Output: (B, D, C) # D: 1024, C: num_classes
+        - Input: (B, C_in, N) # C_in: 1024, N: num_classes
+        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
         """
         out_static, static_adj, A1 = self.forward_static_gcn(x, inp)
         x = x + out_static  # residual
@@ -248,7 +276,7 @@ class AM_GCN(nn.Module):
                              bias=False)  # Use nn.Conv2d instead of nn.Linear
         self.fc2 = nn.Conv2d(model.fc.in_features // 16, model.fc.in_features, kernel_size=1, bias=False)
 
-        self.pooling = nn.AdaptiveAvgPool2d((1024, 29))
+        self.pooling = nn.MaxPool2d(14, 14)
 
     def forward_feature(self, x):
         x = self.features(x)
@@ -258,8 +286,8 @@ class AM_GCN(nn.Module):
         """ Get another confident scores {s_m}.
 
         Shape:
-        - Input: (B, D_in, H, W) # D_in: 2048
-        - Output: (B, C) # C: num_classes
+        - Input: (B, C_in, H, W) # C_in: 2048
+        - Output: (B, C_out) # C_out: num_classes
         """
         x = self.fc(x)
         x = x.view(x.size(0), x.size(1), -1)
@@ -270,8 +298,8 @@ class AM_GCN(nn.Module):
         """ SAM module
 
         Shape:
-        - Input: (B, D_in, H, W) # D_in: 2048
-        - Output: (B, D_out, C) # D_out: 1024, C: num_classes
+        - Input: (B, C_in, H, W) # C_in: 2048
+        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
         """
         mask = self.fc(x)
         mask = mask.view(mask.size(0), mask.size(1), -1)
@@ -284,16 +312,16 @@ class AM_GCN(nn.Module):
 
         return x
 
-    def forward_ave_pool(self, x):
+    def forward_max_pool(self, x):
         x = self.pooling(x)
         return x
 
     def forward_SENet(self, x):
-        """ SENet module
+        """ SAM module
 
         Shape:
-        - Input: (B, D_in, H, W) # D_in: 2048
-        - Output: (B, D_out, H, W) # D_out: 1024
+        - Input: (B, C_in, H, W) # C_in: 2048
+        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
         """
         # Squeeze
         mask = F.avg_pool2d(x, x.size(2))
@@ -305,7 +333,7 @@ class AM_GCN(nn.Module):
 
         return x
 
-    def forward_gcn(self, x, static_adj):
+    def forward_dgcn(self, x, static_adj):
         x = self.gcn(x, static_adj)
         return x
 
@@ -315,15 +343,12 @@ class AM_GCN(nn.Module):
 
         v0 = self.forward_SENet(x)
         v = self.forward_sam(v0)  # B*1024*num_classes
-        # v = self.forward_ave_pool(v)
-        z, A, adj = self.forward_gcn(v, inp)
-
+        z, A, adj = self.forward_dgcn(v, inp)
         z = v + z
         out2 = self.last_linear(z)  # B*1*num_classes
 
         mask_mat = self.mask_mat.detach()
         out2 = (out2 * mask_mat).sum(-1)
-
         out = (out1 + out2) / 2
 
         return out, adj, A
@@ -337,4 +362,6 @@ class AM_GCN(nn.Module):
         ]
 
 
-
+def gcn_resnet101(num_classes, pretrained=True, in_channel=300):
+    model = models.resnet101(pretrained=pretrained)
+    return AM_GCN(model, num_classes, in_channel=in_channel)
