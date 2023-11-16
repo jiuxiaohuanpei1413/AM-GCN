@@ -238,7 +238,9 @@ class AM_GCN(nn.Module):
         self.fc2 = nn.Conv2d(model.fc.in_features // 16, model.fc.in_features, kernel_size=1, bias=False)
 
         self.pooling = nn.MaxPool2d(14, 14)
-        self.fc3 = nn.Conv1d(196, num_classes, 1)
+        self.gmp = nn.AdaptiveMaxPool1d(1)
+
+        self.fc3 = nn.Linear(1024, num_classes)
 
     def forward_feature(self, x):
         x = self.features(x)
@@ -252,11 +254,8 @@ class AM_GCN(nn.Module):
         - Output: (B, C_out) # C_out: num_classes
         """
         x = self.fc(x)
-
         x = x.view(x.size(0), x.size(1), -1)
-
         x = x.topk(1, dim=-1)[0].mean(dim=-1)
-        # print(x.size())
         return x
 
     def forward_sam(self, x):
@@ -273,22 +272,15 @@ class AM_GCN(nn.Module):
 
         x = self.conv_transform(x)
         x = x.view(x.size(0), x.size(1), -1)
-        test = x.transpose(1, 2)
-        test = self.fc3(test)
-        test = test.transpose(1, 2)
-        # print(test.size())
         x = torch.matmul(x, mask)
 
-        return x
 
-    def test(self, x):
-        x = self.conv_transform(x)
-        x = x.view(x.size(0), x.size(1), -1)
-        test = x.transpose(1, 2)
+        test = self.gmp(x).view(x.size(0), x.size(1))
         test = self.fc3(test)
-        test = test.transpose(1, 2)
-        out = test.contiguous()
-        return out
+
+        # print(test.size())
+
+        return test
 
     def forward_max_pool(self, x):
         x = self.pooling(x)
@@ -320,19 +312,16 @@ class AM_GCN(nn.Module):
         out1 = self.forward_classification_sm(x)
 
         v0 = self.forward_SENet(x)
-        # v = self.forward_sam(v0)  # B*1024*num_classes
-        v = self.test(v0)
-        print(v.size())
-
-        z, A, adj = self.forward_gcn(v, inp)
-        z = v + z
-        out2 = self.last_linear(z)  # B*1*num_classes
-
-        mask_mat = self.mask_mat.detach()
-        out2 = (out2 * mask_mat).sum(-1)
+        out2 = self.forward_sam(v0)  # B*1024*num_classes
+        # z, A, adj = self.forward_gcn(v, inp)
+        # z = v + z
+        # out2 = self.last_linear(z)  # B*1*num_classes
+        #
+        # mask_mat = self.mask_mat.detach()
+        # out2 = (out2 * mask_mat).sum(-1)
         out = (out1 + out2) / 2
 
-        return out, adj, A
+        return out
 
     def get_config_optim(self, lr, lrp):
         small_lr_layers = list(map(id, self.features.parameters()))

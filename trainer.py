@@ -114,14 +114,14 @@ class Trainer(object):
 
         if not is_train:
             with torch.no_grad():
-                outputs, adj, A = self.model(inputs, inp)
+                outputs = self.model(inputs, inp)
         else:
-            outputs, adj, A = self.model(inputs, inp)
+            outputs = self.model(inputs, inp)
         # outputs = (outputs1 + outputs2) / 2
 
         loss = self.criterion(outputs, targets)
-        loss1 = self.criterion1(adj, A)
-        loss_total = loss + loss1
+
+        loss_total = loss
         self.meters['loss'].update(loss_total.item(), inputs.size(0))
 
         if is_train:
